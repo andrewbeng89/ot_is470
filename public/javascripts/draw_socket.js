@@ -183,35 +183,13 @@ if (canvas.freeDrawingBrush) {
     canvas.freeDrawingBrush.shadowBlur = 0;
 }
 
-canvas.on('mouse:up', function() {
+canvas.on('mouse:up', changeCallback);
+canvas.on('object:modified', changeCallback);
+
+function changeCallback() {
     changedData = canvas.toJSON();
-    delta = jsondiffpatch.diff(currentData.objects, changedData.objects);
     delta = jsondiffpatch.diff(currentData.objects, changedData.objects);
     socket.emit('drawCanvas', changedData);
     console.log(changedData);
-    /*$state.submitOp({
-        p: ['objects'],
-        od: currentData.objects,
-        oi: changedData.objects
-    });*/
     currentData = changedData;
-});
-
-/*sharejs.open('drawing', 'json', function(error, doc) {
-    $state = doc;
-    $state.set(currentData);
-    doc.on('change', function (op) {
-        stateUpdated(op);
-    })
-});
-
-function stateUpdated(op) {
-    currentData.objects = op[0].oi;
-    console.log(op);
-    console.log({objects:currentData.objects});
-    canvas.loadFromJSON(currentData, function() {
-        canvas.renderAll();
-        currentData = canvas.toJSON();
-        console.log('canvas updated');
-    });
-}*/
+}
