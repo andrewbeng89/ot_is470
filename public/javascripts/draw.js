@@ -8,9 +8,7 @@ var canvas = new fabric.Canvas('c', {
     isDrawingMode: true
 });
 
-var currentData = canvas.toJSON();
-console.log(currentData);
-var changedData, delta, $state;
+var currentData, changedData, delta, $state;
 
 var drawingModeEl = $('drawing-mode'),
 drawingOptionsEl = $('drawing-mode-options'),
@@ -171,9 +169,6 @@ if (canvas.freeDrawingBrush) {
     canvas.freeDrawingBrush.shadowBlur = 0;
 }
 
-canvas.on('path:created', changeCallback);
-canvas.on('object:modified', changeCallback);
-
 function changeCallback() {
     changedData = canvas.toJSON();
     delta = jsondiffpatch.diff(currentData.objects, changedData.objects);
@@ -183,18 +178,63 @@ function changeCallback() {
         oi: changedData
     });
     currentData = changedData;
+    $state.set(currentData);
 }
 
-sharejs.open('drawing', 'json', function(error, doc) {
+if (!document.location.hash) {
+    document.location.hash = '#' + randomDocName();
+}
+var docname = 'hex:' + document.location.hash.slice(1)
+
+canvas.on('path:created', changeCallback);
+canvas.on('object:modified', changeCallback);
+
+sharejs.open(docname, 'json', function(error, doc) {
     $state = doc;
-    $state.set(currentData);
     doc.on('change', function (op) {
+        stateUpdated(op);
+    });
+    console.log({created:doc.created});
+    if (doc.created) {
+        // Newly created
+        currentData = canvas.toJSON();
+        console.log(doc);
+        stateUpdated();
+    } else {
+        // Retrieved doc
+        currentData = doc.get();
+        delete currentData[''];
+        console.log({currentData:currentData});
+        stateUpdated();
+    }
+});
+
+function randomDocName(length) {
+    var chars, x;
+    if (length == null) {
+        length = 10;
+    }
+    chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-=";
+    var name = [];
+    for (x = 0; x < length; x++) {
+        name.push(chars[Math.floor(Math.random() * chars.length)]);
+    }
+    return name.join('');
+}
+
+function stateUpdated(op) {
+    if (op) {
         console.log(op);
         currentData = op[0].oi;
         console.log(currentData);
         canvas.loadFromJSON(currentData, function() {
             canvas.renderAll();
         });
-        console.log('Version: ' + doc.version);
-    });
-});
+        console.log('Version: ' + $state.version);
+    } else {
+        $state.set(currentData);
+        canvas.loadFromJSON(currentData, function() {
+            canvas.renderAll();
+        });
+    }
+}
