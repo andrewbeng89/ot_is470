@@ -20,7 +20,8 @@ drawingShadowOffset = $('drawing-shadow-offset'),
 clearEl = $('clear-canvas');
 
 clearEl.onclick = function () {
-    canvas.clear()
+    canvas.clear();
+    changeCallback();
 };
 
 drawingModeEl.onclick = function () {
@@ -224,7 +225,7 @@ function randomDocName(length) {
 
 function stateUpdated(op) {
     if (op) {
-        console.log(op);
+        console.log({operation:op});
         currentData = op[0].oi;
         console.log(currentData);
         canvas.loadFromJSON(currentData, function() {
