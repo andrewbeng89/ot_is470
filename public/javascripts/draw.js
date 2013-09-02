@@ -10,7 +10,14 @@ var canvas = new fabric.Canvas('c', {
 
 var currentData, changedData, delta, $state;
 
+// Undo and Redo stacks
+var undo = [],
+	redo = [];
+
 var drawingModeEl = $('drawing-mode'),
+eraseModeEl = $('erase-mode'),
+undoEl = $('undo'),
+redoEl = $('redo'),
 drawingOptionsEl = $('drawing-mode-options'),
 drawingColorEl = $('drawing-color'),
 drawingShadowColorEl = $('drawing-shadow-color'),
@@ -24,14 +31,48 @@ clearEl.onclick = function () {
     changeCallback();
 };
 
+undoEl.onclick = function() {
+	canvasUndo();
+}
+
+redoEl.onclick = function() {
+	canvasRedo();
+}
+
 drawingModeEl.onclick = function () {
     canvas.isDrawingMode = !canvas.isDrawingMode;
     if (canvas.isDrawingMode) {
+        canvas.off('object:selected', removeOnClick);
         drawingModeEl.innerHTML = 'Cancel drawing mode';
+        eraseModeEl.innerHTML = 'Enter erase mode';
         drawingOptionsEl.style.display = '';
     } else {
+        canvas.off('object:selected', removeOnClick);
+        drawingModeEl.innerHTML = 'Enter drawing mode';
+        eraseModeEl.innerHTML = 'Enter erase mode';
+        drawingOptionsEl.style.display = 'none';
+    }
+};
+
+function removeOnClick() {
+	var objectToErase = canvas.getActiveObject();
+	objectToErase.remove();
+	changeCallback();
+}
+
+eraseModeEl.onclick = function () {
+    canvas.isDrawingMode = !canvas.isDrawingMode;
+    if (canvas.isDrawingMode) {
+    	eraseModeEl.innerHTML = 'Enter erase mode';
+    	drawingModeEl.innerHTML = 'Cancel drawing mode';
+        drawingOptionsEl.style.display = '';
+        canvas.off('object:selected', removeOnClick);
+    } else {
+        eraseModeEl.innerHTML = 'Cancel erase mode';
         drawingModeEl.innerHTML = 'Enter drawing mode';
         drawingOptionsEl.style.display = 'none';
+        canvas.on('object:selected', removeOnClick);
+        console.log(typeof canvas);
     }
 };
 
@@ -170,14 +211,48 @@ if (canvas.freeDrawingBrush) {
     canvas.freeDrawingBrush.shadowBlur = 0;
 }
 
-function changeCallback() {
-    changedData = canvas.toJSON();
+function canvasUndo() {
+	if (undo.length > 0) {
+		var lastOp = undo.pop();
+		redo.push(lastOp);
+		currentData = canvas.toJSON();
+		canvas.loadFromJSON(lastOp, function() {
+            canvas.renderAll();
+            changeCallback(true, lastOp);
+        });
+	} else {
+		console.log("no undo operations");
+	}
+}
+
+function canvasRedo() {
+	if (redo.length > 0) {
+		var lastOp = redo.pop();
+		undo.push(lastOp);
+		currentData = canvas.toJSON();
+		canvas.loadFromJSON(lastOp, function() {
+            canvas.renderAll();
+            changeCallback(true, lastOp);
+        });
+	} else {
+		console.log("no redo operations");
+	}
+}
+
+function changeCallback(undo_redo, lastOp) {
+    console.log({undo_redo:undo_redo});
+    changedData = (undo_redo === true) ? lastOp : canvas.toJSON();
     delta = jsondiffpatch.diff(currentData.objects, changedData.objects);
     $state.submitOp({
         p: [''],
         od: currentData,
         oi: changedData
     });
+    if (undo_redo !== true || undo_redo === undefined) {
+    	if (currentData !== undo[undo.length - 1]) {
+    		undo.push(currentData);
+    	}
+    }
     currentData = changedData;
     $state.set(currentData);
 }
@@ -199,11 +274,13 @@ sharejs.open(docname, 'json', function(error, doc) {
     if (doc.created) {
         // Newly created
         currentData = canvas.toJSON();
+        undo.push(currentData);
         console.log(doc);
         stateUpdated();
     } else {
         // Retrieved doc
         currentData = doc.get();
+        undo.push(currentData);
         delete currentData[''];
         console.log({currentData:currentData});
         stateUpdated();
