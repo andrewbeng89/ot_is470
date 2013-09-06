@@ -4,15 +4,95 @@ var $ = function (id) {
     return document.getElementById(id)
 };
 
+if (!document.location.hash) {
+    document.location.hash = '#' + randomDocName();
+}
+var docname = 'hex:' + document.location.hash.slice(1);
+
 var canvas = new fabric.Canvas('c', {
     isDrawingMode: true
 });
 
-var currentData, changedData, delta, $state;
+var $state,
+canvasObjects = canvas.toJSON();
+canvasObjects.objects = canvas._objects;
+sharejs.open(docname, 'json', function(error, doc) {
+    $state = doc;
+    doc.on('change', function (op) {
+        stateUpdated(op);
+    });
+    if (doc.created) {
+        // Newly created
+        canvas.clear();
+        $state.set(canvasObjects);
+    } else {
+        // Retrieved doc
+        stateUpdated();
+    }
+});
 
-// Undo and Redo stacks
-var undo = [],
-	redo = [];
+canvas.on('path:created', function(e) {
+	console.log({path_created: e.path.toObject()});
+	$state.submitOp({
+		p: ['objects', canvasObjects.length],
+    	li: e.path.toObject()
+	});
+});
+
+var selectedObject, originIndex, originIndexes = [];
+canvas.on('object:modified', function(e) {
+	if (e.target.type === "path") {
+		console.log(originIndex);
+		selectedObject = e.target.toObject();
+		console.log(selectedObject);
+		$state.submitOp({
+			p: ['objects', originIndex],
+			ld: canvasObjects.objects[originIndex],
+			li: selectedObject
+		});
+	} else if (e.target.type === "group") {
+		console.log(e.target);
+		canvas.discardActiveGroup();
+		var updateObjects = [];
+		originIndexes.forEach(function(index, i) {
+			console.log({path:canvas.getObjects()[index].toObject()});
+			updateObjects.push({
+				index: index,
+				object: canvas.getObjects()[index].toObject()
+			});
+		});
+		updateObjects.forEach(function(uo) {
+			$state.submitOp({
+				p: ['objects', uo.index],
+				ld: canvasObjects.objects[uo.index],
+				li: uo.object
+			});
+		});
+		console.log(updateObjects);
+	}
+});
+
+canvas.on('object:selected', function(e) {
+	originIndex = Array.indexOf(canvasObjects.objects, e.target.toObject());
+	console.log(e.target.toObject());
+});
+
+canvas.on('selection:created', function(e) {
+	originIndexes = [];
+	console.log(e);
+	var originalStates = e.target.objects
+	var group = e.target.getObjects();
+	console.log(group);
+	for (var i = 0; i < group.length; i++) {
+		var obj = group[i].toObject();
+		obj.left = group[i].originalState.left;
+		obj.top = group[i].originalState.top;
+		obj.hasControls = true;
+		console.log(obj);
+		originIndexes.push(Array.indexOf(canvasObjects.objects, obj));
+	}
+	console.log(originIndexes);
+});
 
 var drawingModeEl = $('drawing-mode'),
 eraseModeEl = $('erase-mode'),
@@ -28,51 +108,18 @@ clearEl = $('clear-canvas');
 
 clearEl.onclick = function () {
     canvas.clear();
-    changeCallback({});
 };
-
-undoEl.onclick = function() {
-	canvasUndo();
-}
-
-redoEl.onclick = function() {
-	canvasRedo();
-}
 
 drawingModeEl.onclick = function () {
     canvas.isDrawingMode = !canvas.isDrawingMode;
     if (canvas.isDrawingMode) {
-        canvas.off('object:selected', removeOnClick);
         drawingModeEl.innerHTML = 'Cancel drawing mode';
         eraseModeEl.innerHTML = 'Enter erase mode';
         drawingOptionsEl.style.display = '';
     } else {
-        canvas.off('object:selected', removeOnClick);
         drawingModeEl.innerHTML = 'Enter drawing mode';
         eraseModeEl.innerHTML = 'Enter erase mode';
         drawingOptionsEl.style.display = 'none';
-    }
-};
-
-function removeOnClick() {
-	var objectToErase = canvas.getActiveObject();
-	objectToErase.remove();
-	changeCallback({});
-}
-
-eraseModeEl.onclick = function () {
-    canvas.isDrawingMode = !canvas.isDrawingMode;
-    if (canvas.isDrawingMode) {
-    	eraseModeEl.innerHTML = 'Enter erase mode';
-    	drawingModeEl.innerHTML = 'Cancel drawing mode';
-        drawingOptionsEl.style.display = '';
-        canvas.off('object:selected', removeOnClick);
-    } else {
-        eraseModeEl.innerHTML = 'Cancel erase mode';
-        drawingModeEl.innerHTML = 'Enter drawing mode';
-        drawingOptionsEl.style.display = 'none';
-        canvas.on('object:selected', removeOnClick);
-        console.log(typeof canvas);
     }
 };
 
@@ -211,88 +258,10 @@ if (canvas.freeDrawingBrush) {
     canvas.freeDrawingBrush.shadowBlur = 0;
 }
 
-function canvasUndo() {
-	if (undo.length > 0) {
-		var lastOp = undo.pop();
-		redo.push(lastOp);
-		currentData = canvas.toJSON();
-		canvas.loadFromJSON(lastOp, function() {
-            canvas.renderAll();
-            changeCallback({}, true, lastOp);
-        });
-	} else {
-		console.log("no undo operations");
-	}
-}
-
-function canvasRedo() {
-	if (redo.length > 0) {
-		var lastOp = redo.pop();
-		undo.push(lastOp);
-		currentData = canvas.toJSON();
-		canvas.loadFromJSON(lastOp, function() {
-            canvas.renderAll();
-            changeCallback({}, true, lastOp);
-        });
-	} else {
-		console.log("no redo operations");
-	}
-}
-
-function changeCallback(e, undo_redo, lastOp) {
-    console.log({e:e});
-    changedData = (undo_redo === true) ? lastOp : canvas.toJSON();
-    delta = jsondiffpatch.diff(currentData.objects, changedData.objects);
-    if (e.path) {
-    	$state.submitOp({
-    		p: ['objects', currentData.objects.length],
-    		li: e.path
-    	});
-    } else {
-    	$state.submitOp({
-        	p: [''],
-        	od: currentData,
-        	oi: changedData
-    	});
-    }
-    if (undo_redo !== true || undo_redo === undefined) {
-    	if (currentData !== undo[undo.length - 1]) {
-    		undo.push(currentData);
-    	}
-    }
-    currentData = changedData;
-    $state.set(currentData);
-}
-
 if (!document.location.hash) {
     document.location.hash = '#' + randomDocName();
 }
 var docname = 'hex:' + document.location.hash.slice(1)
-
-canvas.on('path:created', changeCallback);
-canvas.on('object:modified', changeCallback);
-
-sharejs.open(docname, 'json', function(error, doc) {
-    $state = doc;
-    doc.on('change', function (op) {
-        stateUpdated(op);
-    });
-    console.log({created:doc.created});
-    if (doc.created) {
-        // Newly created
-        currentData = canvas.toJSON();
-        undo.push(currentData);
-        console.log(doc);
-        stateUpdated();
-    } else {
-        // Retrieved doc
-        currentData = doc.get();
-        undo.push(currentData);
-        delete currentData[''];
-        console.log({currentData:currentData});
-        stateUpdated();
-    }
-});
 
 function randomDocName(length) {
     var chars, x;
@@ -308,22 +277,72 @@ function randomDocName(length) {
 }
 
 function stateUpdated(op) {
-    if (op) {
-        console.log({operation:op});
-        if (op[0].li) {
-        	currentData.objects.push(op[0].li);
-        } else {
-        	currentData = op[0].oi;
-        }
-        console.log(currentData);
-        canvas.loadFromJSON(currentData, function() {
-            canvas.renderAll();
-        });
-        console.log('Version: ' + $state.version);
-    } else {
-        $state.set(currentData);
-        canvas.loadFromJSON(currentData, function() {
-            canvas.renderAll();
-        });
-    }
+	if (op) {
+		op.forEach(function (c) {
+			if (c.p[0] == 'objects' && c.li) {
+				canvasObjects.objects.push(c.li);
+				originIndex++;
+				originIndexes.forEach(function(index) {
+					index++;
+				});
+			} else if (c.p[0] == 'objects' && c.ld) {
+				canvasObjects.objects.splice(originIndex, 1);
+				originIndex--;
+				originIndexes.forEach(function(index) {
+					index--;
+				});
+			}
+		})
+	} else {
+		// first run
+	}
+	canvasObjects = $state.snapshot;
+	canvas.loadFromJSON(canvasObjects, function() {
+		canvas.renderAll();
+	});
+}
+
+Object.equals = function( x, y ) {
+  if ( x === y ) return true;
+    // if both x and y are null or undefined and exactly the same
+
+  if ( ! ( x instanceof Object ) || ! ( y instanceof Object ) ) return false;
+    // if they are not strictly equal, they both need to be Objects
+
+  if ( x.constructor !== y.constructor ) return false;
+    // they must have the exact same prototype chain, the closest we can do is
+    // test there constructor.
+
+  for ( var p in x ) {
+    if ( ! x.hasOwnProperty( p ) ) continue;
+      // other properties were tested using x.constructor === y.constructor
+
+    if ( ! y.hasOwnProperty( p ) ) return false;
+      // allows to compare x[ p ] and y[ p ] when set to undefined
+
+    if ( x[ p ] === y[ p ] ) continue;
+      // if they have the same strict value or identity then they are equal
+
+    if ( typeof( x[ p ] ) !== "object" ) return false;
+      // Numbers, Strings, Functions, Booleans must be strictly equal
+
+    if ( ! Object.equals( x[ p ],  y[ p ] ) ) return false;
+      // Objects and Arrays must be tested recursively
+  }
+
+  for ( p in y ) {
+    if ( y.hasOwnProperty( p ) && ! x.hasOwnProperty( p ) ) return false;
+      // allows x[ p ] to be set to undefined
+  }
+  return true;
+}
+
+Array.indexOf = function(arr, x) {
+	var index = -1;
+	arr.forEach(function(object, i) {
+		if (Object.equals(object, x)) {
+			index = i;
+		}
+	});
+	return index;
 }
