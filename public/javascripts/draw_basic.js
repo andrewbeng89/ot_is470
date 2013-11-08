@@ -14,8 +14,9 @@ var canvas = new fabric.Canvas('c', {
 });
 
 var $state,
-canvasObjects = canvas.toJSON();
-canvasObjects.objects = canvas._objects;
+canvasObjects = [],
+canvasJSON = canvas.toJSON(),
+objectModDelta;
 sharejs.open(docname, 'json', function(error, doc) {
     $state = doc;
     doc.on('change', function (op) {
@@ -24,13 +25,18 @@ sharejs.open(docname, 'json', function(error, doc) {
     if (doc.created) {
         // Newly created
         canvas.clear();
-        $state.set(canvasObjects);
+        $state.set(canvasJSON);
     } else {
         // Retrieved doc
+        canvasJSON = $state.snapshot;
         stateUpdated();
     }
 });
 
+/*
+* Listener for path created
+* Adds new path objects to $state
+*/
 canvas.on('path:created', function(e) {
 	console.log({path_created: e.path.toObject()});
 	$state.submitOp({
@@ -39,17 +45,78 @@ canvas.on('path:created', function(e) {
 	});
 });
 
+
+/*
+* Object movement event listen
+* Calculates posistional delta
+* for object that is moving
+*/
 var selectedObject, originIndex, originIndexes = [];
+canvas.on('object:moving', function(e) {
+    selectedObject = canvasObjects[originIndex];
+    var delta = jsondiffpatch.diff(selectedObject, e.target.toObject());
+    console.log(delta);
+    console.log("top: " + delta.top);
+    console.log("left: " + delta.left);
+    objectModDelta = {
+        top: delta.top,
+        left: delta.left
+    };
+});
+
+canvas.on('object:scaling', function(e) {
+    selectedObject = canvasObjects[originIndex];
+    console.log("scaleX, scaleY: " + selectedObject.scaleX + "," + selectedObject.scaleY);
+    var delta = jsondiffpatch.diff(selectedObject, e.target.toObject());
+    console.log("scaling...");
+    console.log(delta);
+    if (delta.top && delta.left && delta.scaleX && delta.scaleY) {
+        objectModDelta = {
+            top: delta.top,
+            left: delta.left,
+            scaleX: delta.scaleX,
+            scaleY: delta.scaleY
+        };
+    } else if (delta.top && delta.scaleY) {
+        objectModDelta = {
+            top: delta.top,
+            scaleY: delta.scaleY
+        };
+    } else {
+        objectModDelta = {
+            left: delta.left,
+            scaleX: delta.scaleX
+        };
+    }
+});
+
+/*
+* Object modified event listener
+* If object is moved, only update position
+* TODO: object manipulation, grouped movement/manipulation
+*/
 canvas.on('object:modified', function(e) {
 	if (e.target.type === "path") {
-		console.log(originIndex);
 		selectedObject = e.target.toObject();
-		console.log(selectedObject);
-		$state.submitOp({
-			p: ['objects', originIndex],
-			ld: canvasObjects.objects[originIndex],
-			li: selectedObject
-		});
+		//If an object has been moved
+        if (objectModDelta !== undefined) {
+            console.log(objectModDelta);
+            for (var pos in objectModDelta) {
+                console.log(pos);
+                $state.submitOp({
+                    p: ['objects', originIndex, pos],
+                    od: objectModDelta[pos][0],
+                    oi: objectModDelta[pos][1]
+                });
+            }
+            objectModDelta = undefined;
+        } else {
+    		$state.submitOp({
+    			p: ['objects', originIndex],
+    			ld: canvasObjects[originIndex],
+    			li: selectedObject
+    		});
+        }
 	} else if (e.target.type === "group") {
 		console.log(e.target);
 		canvas.discardActiveGroup();
@@ -64,7 +131,7 @@ canvas.on('object:modified', function(e) {
 		updateObjects.forEach(function(uo) {
 			$state.submitOp({
 				p: ['objects', uo.index],
-				ld: canvasObjects.objects[uo.index],
+				ld: canvasObjects[uo.index],
 				li: uo.object
 			});
 		});
@@ -73,8 +140,8 @@ canvas.on('object:modified', function(e) {
 });
 
 canvas.on('object:selected', function(e) {
-	originIndex = Array.indexOf(canvasObjects.objects, e.target.toObject());
-	console.log(e.target.toObject());
+    originIndex = Array.indexOf(canvasObjects, e.target.toObject());
+    console.log(originIndex);
 });
 
 canvas.on('selection:created', function(e) {
@@ -89,7 +156,7 @@ canvas.on('selection:created', function(e) {
 		obj.top = group[i].originalState.top;
 		obj.hasControls = true;
 		console.log(obj);
-		originIndexes.push(Array.indexOf(canvasObjects.objects, obj));
+		originIndexes.push(Array.indexOf(canvasObjects, obj));
 	}
 	console.log(originIndexes);
 });
@@ -280,13 +347,13 @@ function stateUpdated(op) {
 	if (op) {
 		op.forEach(function (c) {
 			if (c.p[0] == 'objects' && c.li) {
-				canvasObjects.objects.push(c.li);
+				canvasObjects.push(c.li);
 				originIndex++;
 				originIndexes.forEach(function(index) {
 					index++;
 				});
 			} else if (c.p[0] == 'objects' && c.ld) {
-				canvasObjects.objects.splice(originIndex, 1);
+				canvasObjects.splice(originIndex, 1);
 				originIndex--;
 				originIndexes.forEach(function(index) {
 					index--;
@@ -296,9 +363,10 @@ function stateUpdated(op) {
 	} else {
 		// first run
 	}
-	canvasObjects = $state.snapshot;
-	canvas.loadFromJSON(canvasObjects, function() {
-		canvas.renderAll();
+	canvasJSON = $state.snapshot;
+	canvas.loadFromJSON(canvasJSON, function() {
+		canvasObjects = canvasJSON.objects;
+        canvas.renderAll();
 	});
 }
 
