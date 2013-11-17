@@ -1,6 +1,6 @@
 var socket = io.connect('/');
 
-var $ = function (id) {
+var $id = function (id) {
     return document.getElementById(id)
 };
 
@@ -17,6 +17,11 @@ var $state,
 canvasObjects = [],
 canvasJSON = canvas.toJSON(),
 objectModDelta;
+
+// Undo and Redo stacks
+var undo = [],
+    redo = [];
+
 sharejs.open(docname, 'json', function(error, doc) {
     $state = doc;
     doc.on('change', function (op) {
@@ -39,10 +44,12 @@ sharejs.open(docname, 'json', function(error, doc) {
 */
 canvas.on('path:created', function(e) {
 	console.log({path_created: e.path.toObject()});
-	$state.submitOp({
-		p: ['objects', canvasObjects.length],
-    	li: e.path.toObject()
-	});
+	var createOp = {
+        p: ['objects', canvasObjects.length],
+        li: e.path.toObject()
+    };
+    $state.submitOp(createOp);
+    undo.push(createOp);
 });
 
 
@@ -90,32 +97,47 @@ canvas.on('object:scaling', function(e) {
     }
 });
 
+canvas.on('object:rotating', function(e) {
+    selectedObject = canvasObjects[originIndex];
+    var delta = jsondiffpatch.diff(selectedObject, e.target.toObject());
+    console.log(delta);
+    console.log("angle: " + delta.angle);
+    objectModDelta = {
+        angle: delta.angle
+    };
+});
+
 /*
 * Object modified event listener
 * If object is moved, only update position
 * TODO: object manipulation, grouped movement/manipulation
 */
 canvas.on('object:modified', function(e) {
-	if (e.target.type === "path") {
+	var modOp;
+    if (e.target.type === "path") {
 		selectedObject = e.target.toObject();
 		//If an object has been moved
         if (objectModDelta !== undefined) {
             console.log(objectModDelta);
             for (var pos in objectModDelta) {
                 console.log(pos);
-                $state.submitOp({
+                modOp = {
                     p: ['objects', originIndex, pos],
                     od: objectModDelta[pos][0],
                     oi: objectModDelta[pos][1]
-                });
+                };
+                $state.submitOp(modOp);
+                undo.push(modOp);
             }
             objectModDelta = undefined;
         } else {
-    		$state.submitOp({
-    			p: ['objects', originIndex],
-    			ld: canvasObjects[originIndex],
-    			li: selectedObject
-    		});
+            modOp = {
+                p: ['objects', originIndex],
+                ld: canvasObjects[originIndex],
+                li: selectedObject
+            };
+    		$state.submitOp(modOp);
+            undo.push(modOp);
         }
 	} else if (e.target.type === "group") {
 		console.log(e.target);
@@ -129,11 +151,13 @@ canvas.on('object:modified', function(e) {
 			});
 		});
 		updateObjects.forEach(function(uo) {
-			$state.submitOp({
-				p: ['objects', uo.index],
-				ld: canvasObjects[uo.index],
-				li: uo.object
-			});
+			modOp = {
+                p: ['objects', uo.index],
+                ld: canvasObjects[uo.index],
+                li: uo.object
+            };
+            $state.submitOp(modOp);
+            undo.push(modOp);
 		});
 		console.log(updateObjects);
 	}
@@ -161,29 +185,106 @@ canvas.on('selection:created', function(e) {
 	console.log(originIndexes);
 });
 
-var drawingModeEl = $('drawing-mode'),
-eraseModeEl = $('erase-mode'),
-undoEl = $('undo'),
-redoEl = $('redo'),
-drawingOptionsEl = $('drawing-mode-options'),
-drawingColorEl = $('drawing-color'),
-drawingShadowColorEl = $('drawing-shadow-color'),
-drawingLineWidthEl = $('drawing-line-width'),
-drawingShadowWidth = $('drawing-shadow-width'),
-drawingShadowOffset = $('drawing-shadow-offset'),
-clearEl = $('clear-canvas');
+var drawingModeEl = $id('drawing-mode'),
+eraseModeEl = $id('erase-mode'),
+undoEl = $id('undo'),
+redoEl = $id('redo'),
+drawingOptionsEl = $id('drawing-mode-options'),
+drawingColorEl = $id('drawing-color'),
+drawingShadowColorEl = $id('drawing-shadow-color'),
+drawingLineWidthEl = $id('drawing-line-width'),
+drawingShadowWidth = $id('drawing-shadow-width'),
+drawingShadowOffset = $id('drawing-shadow-offset'),
+clearEl = $id('clear-canvas');
 
 clearEl.onclick = function () {
     canvas.clear();
+    var clearOp = {
+        p: ['objects'],
+        od: canvasObjects,
+        oi: []
+    };
+    $state.submitOp(clearOp);
+    undo.push(clearOp);
+};
+
+function inverseOp(op, new_op) {
+    for (var action in op) {
+        if (action === 'p') {
+            new_op.p = op.p;
+        } else if (action === 'li') {
+            new_op.ld = op[action];
+        } else if (action === 'ld') {
+            new_op.li = op[action];
+        } else if (action === 'oi') {
+            new_op.od = op[action];
+        } else if (action === 'od') {
+            new_op.oi = op[action];
+        }
+    }
+    return new_op;
+}
+
+undoEl.onclick = function() {
+    if (undo.length > 0) {
+        var lastOp = undo.pop();
+        var undoOp = {
+            p: lastOp.p
+        };
+        redo.push(lastOp);
+        $state.submitOp(inverseOp(lastOp, undoOp));
+    } else {
+        console.log("no undo operations");
+    }
+};
+
+redoEl.onclick = function() {
+    if (redo.length > 0) {
+        var lastOp = redo.pop();
+        undo.push(lastOp);
+        $state.submitOp(lastOp);
+    } else {
+        console.log("no redo operations");
+    }
+};
+
+eraseModeEl.onclick = function() {
+    canvas.isDrawingMode = !canvas.isDrawingMode;
+    if (canvas.isDrawingMode) {
+        eraseModeEl.innerHTML = 'Enter erase mode';
+        drawingModeEl.innerHTML = 'Cancel drawing mode';
+        drawingOptionsEl.style.display = '';
+        canvas.off('object:selected', removeOnClick);
+    } else {
+        eraseModeEl.innerHTML = 'Cancel erase mode';
+        drawingModeEl.innerHTML = 'Enter drawing mode';
+        drawingOptionsEl.style.display = 'none';
+        canvas.on('object:selected', removeOnClick);
+        console.log(typeof canvas);
+    }
+};
+
+function removeOnClick() {
+    var objectToErase = canvas.getActiveObject();
+    console.log("Index to delete: " + originIndex);
+    objectToErase.remove();
+    var removeOp = {
+        p: ['objects', originIndex],
+        ld: objectToErase.toObject()
+    };
+    $state.submitOp(removeOp);
+    undo.push(removeOp);
 };
 
 drawingModeEl.onclick = function () {
     canvas.isDrawingMode = !canvas.isDrawingMode;
     if (canvas.isDrawingMode) {
+        canvas.off('object:selected', removeOnClick);
         drawingModeEl.innerHTML = 'Cancel drawing mode';
         eraseModeEl.innerHTML = 'Enter erase mode';
         drawingOptionsEl.style.display = '';
     } else {
+        canvas.off('object:selected', removeOnClick);
         drawingModeEl.innerHTML = 'Enter drawing mode';
         eraseModeEl.innerHTML = 'Enter erase mode';
         drawingOptionsEl.style.display = 'none';
@@ -277,7 +378,7 @@ if (fabric.PatternBrush) {
     texturePatternBrush.source = img;
 }
 
-$('drawing-mode-selector').onchange = function () {
+$id('drawing-mode-selector').onchange = function () {
 
     if (this.value === 'hline') {
         canvas.freeDrawingBrush = vLinePatternBrush;
