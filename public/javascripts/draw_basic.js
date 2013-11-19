@@ -44,10 +44,10 @@ sharejs.open(docname, 'json', function(error, doc) {
 */
 canvas.on('path:created', function(e) {
 	console.log({path_created: e.path.toObject()});
-	var createOp = {
+	var createOp = [{
         p: ['objects', canvasObjects.length],
         li: e.path.toObject()
-    };
+    }];
     $state.submitOp(createOp);
     undo.push(createOp);
 });
@@ -61,10 +61,8 @@ canvas.on('path:created', function(e) {
 var selectedObject, originIndex, originIndexes = [];
 canvas.on('object:moving', function(e) {
     selectedObject = canvasObjects[originIndex];
-    var delta = jsondiffpatch.diff(selectedObject, e.target.toObject());
-    console.log(delta);
-    console.log("top: " + delta.top);
-    console.log("left: " + delta.left);
+    var movingObject = e.target.toObject()
+    var delta = jsondiffpatch.diff(selectedObject, movingObject);
     objectModDelta = {
         top: delta.top,
         left: delta.left
@@ -113,29 +111,30 @@ canvas.on('object:rotating', function(e) {
 * TODO: object manipulation, grouped movement/manipulation
 */
 canvas.on('object:modified', function(e) {
-	var modOp;
+	var modOp = [];
     if (e.target.type === "path") {
 		selectedObject = e.target.toObject();
 		//If an object has been moved
         if (objectModDelta !== undefined) {
+            console.log("DELTA: ");
             console.log(objectModDelta);
             for (var pos in objectModDelta) {
                 console.log(pos);
-                modOp = {
+                modOp.push({
                     p: ['objects', originIndex, pos],
                     od: objectModDelta[pos][0],
                     oi: objectModDelta[pos][1]
-                };
-                $state.submitOp(modOp);
-                undo.push(modOp);
+                });
             }
+            $state.submitOp(modOp);
+            undo.push(modOp);
             objectModDelta = undefined;
         } else {
-            modOp = {
+            modOp.push({
                 p: ['objects', originIndex],
                 ld: canvasObjects[originIndex],
                 li: selectedObject
-            };
+            });
     		$state.submitOp(modOp);
             undo.push(modOp);
         }
@@ -150,15 +149,15 @@ canvas.on('object:modified', function(e) {
 				object: canvas.getObjects()[index].toObject()
 			});
 		});
-		updateObjects.forEach(function(uo) {
-			modOp = {
+        updateObjects.forEach(function(uo) {
+			modOp.push({
                 p: ['objects', uo.index],
                 ld: canvasObjects[uo.index],
                 li: uo.object
-            };
-            $state.submitOp(modOp);
-            undo.push(modOp);
+            });
 		});
+        $state.submitOp(modOp);
+        undo.push(modOp);
 		console.log(updateObjects);
 	}
 });
@@ -199,40 +198,40 @@ clearEl = $id('clear-canvas');
 
 clearEl.onclick = function () {
     canvas.clear();
-    var clearOp = {
+    var clearOp = [{
         p: ['objects'],
         od: canvasObjects,
         oi: []
-    };
+    }];
     $state.submitOp(clearOp);
     undo.push(clearOp);
 };
 
-function inverseOp(op, new_op) {
-    for (var action in op) {
-        if (action === 'p') {
-            new_op.p = op.p;
-        } else if (action === 'li') {
-            new_op.ld = op[action];
-        } else if (action === 'ld') {
-            new_op.li = op[action];
-        } else if (action === 'oi') {
-            new_op.od = op[action];
-        } else if (action === 'od') {
-            new_op.oi = op[action];
-        }
-    }
-    return new_op;
-}
-
 undoEl.onclick = function() {
     if (undo.length > 0) {
         var lastOp = undo.pop();
-        var undoOp = {
-            p: lastOp.p
-        };
+        var undoOp = $state.type.invert(lastOp);
+        $state.submitOp(undoOp);
+        var allOps = [];
+        var opId, transformOps = [];
+        for (var serverOp in $state.serverOps) {
+            if (Object.equals($state.serverOps[serverOp], lastOp)) {
+                opId = serverOp;
+                console.log(opId);
+            }
+        }
+        for (var serverOp in $state.serverOps) {
+            if (serverOp > opId) {
+                transformOps.push($state.serverOps[opId]);
+            }
+        }
+        if (transformOps.length > 0) {
+            transformOps.forEach(function(t_op) {
+                undoOp = $state.type.transform(undoOp, t_op, 'left') 
+            });   
+        }
+        console.log(transformOps)
         redo.push(lastOp);
-        $state.submitOp(inverseOp(lastOp, undoOp));
     } else {
         console.log("no undo operations");
     }
@@ -268,10 +267,10 @@ function removeOnClick() {
     var objectToErase = canvas.getActiveObject();
     console.log("Index to delete: " + originIndex);
     objectToErase.remove();
-    var removeOp = {
+    var removeOp = [{
         p: ['objects', originIndex],
         ld: objectToErase.toObject()
-    };
+    }];
     $state.submitOp(removeOp);
     undo.push(removeOp);
 };
